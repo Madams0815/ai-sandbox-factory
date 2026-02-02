@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# deploy-ai-sandbox.sh — Comprehensive AI Sandbox Factory
+# deploy-ai-sandbox.sh v1.0.1 — Comprehensive AI Sandbox Factory
 # =============================================================================
 # Creates a fully-equipped Docker container as an "AI Sandbox" with:
 #   - Multi-platform host detection (macOS, Arch, Debian/Ubuntu)
@@ -317,35 +317,54 @@ set +a
 # ==========================================
 header "4. Claude Skills & Extensions (Optional)"
 
-# Create skills directory with proper permissions
-mkdir -p ~/.claude/skills ~/.claude/hooks
-chmod 755 ~/.claude ~/.claude/skills ~/.claude/hooks 2>/dev/null || true
+# Create skills directory with proper permissions.
+# If ~/.claude is owned by a different UID (e.g., container UID 1000 from a previous
+# deployment), mkdir/git-clone will fail with "Permission denied". Fix ownership first.
+if [[ -d "$HOME/.claude" ]] && [[ ! -w "$HOME/.claude" ]]; then
+    warn "$HOME/.claude exists but is not writable (likely owned by container UID 1000 from a previous run)."
+    info "Fixing ownership with sudo..."
+    sudo chown -R "$(id -u):$(id -g)" "$HOME/.claude" || {
+        error "Could not fix $HOME/.claude permissions."
+        error "Run manually: sudo chown -R \$(id -u):\$(id -g) $HOME/.claude"
+    }
+fi
+mkdir -p "$HOME/.claude/skills" "$HOME/.claude/hooks"
+chmod 755 "$HOME/.claude" "$HOME/.claude/skills" "$HOME/.claude/hooks" 2>/dev/null || true
 
 if confirm "Install curated Claude skills (awesome-claude-skills)?"; then
-    if [ ! -d ~/.claude/skills/awesome-claude-skills ]; then
-        git clone https://github.com/ComposioHQ/awesome-claude-skills.git \
-            ~/.claude/skills/awesome-claude-skills
-        info "Installed awesome-claude-skills."
+    if [ ! -d "$HOME/.claude/skills/awesome-claude-skills" ]; then
+        if git clone https://github.com/ComposioHQ/awesome-claude-skills.git \
+            "$HOME/.claude/skills/awesome-claude-skills"; then
+            info "Installed awesome-claude-skills."
+        else
+            error "Failed to clone awesome-claude-skills. Skipping (non-fatal)."
+        fi
     else
         info "awesome-claude-skills already present."
     fi
 fi
 
 if confirm "Install experimental skills sandbox (everything-claude-code)?"; then
-    if [ ! -d ~/.claude/skills/everything-sandbox ]; then
-        git clone https://github.com/affaan-m/everything-claude-code.git \
-            ~/.claude/skills/everything-sandbox
-        info "Installed everything-claude-code (sandbox)."
+    if [ ! -d "$HOME/.claude/skills/everything-sandbox" ]; then
+        if git clone https://github.com/affaan-m/everything-claude-code.git \
+            "$HOME/.claude/skills/everything-sandbox"; then
+            info "Installed everything-claude-code (sandbox)."
+        else
+            error "Failed to clone everything-claude-code. Skipping (non-fatal)."
+        fi
     else
         info "everything-claude-code already present."
     fi
 fi
 
 if confirm "Install marketing-focused Claude skills (marketingskills)?"; then
-    if [ ! -d ~/.claude/skills/marketingskills ]; then
-        git clone https://github.com/coreyhaines31/marketingskills.git \
-            ~/.claude/skills/marketingskills
-        info "Installed marketingskills."
+    if [ ! -d "$HOME/.claude/skills/marketingskills" ]; then
+        if git clone https://github.com/coreyhaines31/marketingskills.git \
+            "$HOME/.claude/skills/marketingskills"; then
+            info "Installed marketingskills."
+        else
+            error "Failed to clone marketingskills. Skipping (non-fatal)."
+        fi
     else
         info "marketingskills already present."
     fi
@@ -360,10 +379,13 @@ echo -e "Recommended for: experimental workflows, research, meta-learning"
 echo -e "Not recommended for: production, deterministic tasks, compliance work"
 echo ""
 if confirm "Install Claudeception (continuous learning, may cause context drift)?"; then
-    if [ ! -d ~/.claude/skills/claudeception ]; then
-        git clone https://github.com/blader/Claudeception.git \
-            ~/.claude/skills/claudeception
-        info "Installed Claudeception (use with caution)."
+    if [ ! -d "$HOME/.claude/skills/claudeception" ]; then
+        if git clone https://github.com/blader/Claudeception.git \
+            "$HOME/.claude/skills/claudeception"; then
+            info "Installed Claudeception (use with caution)."
+        else
+            error "Failed to clone Claudeception. Skipping (non-fatal)."
+        fi
     else
         info "Claudeception already present."
     fi
@@ -1015,7 +1037,7 @@ fi
 cd /workspace
 if [ ! -d ".venv" ]; then
     echo "Initializing Python virtual environment..."
-    gosu $AI_USER bash -c 'export PATH="/home/ai-worker/.local/bin:$PATH" && uv venv --quiet' 2>/dev/null || true
+    gosu $AI_USER bash -c 'export PATH="/home/ai-worker/.local/bin:$PATH" && uv venv --quiet --system-site-packages' 2>/dev/null || true
 fi
 
 # --- Logs directory ---
@@ -1468,7 +1490,7 @@ RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/se
     -d parse_mode="Markdown")
 
 if echo "$RESPONSE" | grep -q '"ok":true'; then
-    echo "✅ SUCCESS: Message sent!"
+    echo "SUCCESS: Message sent!"
     echo ""
     echo "Check your Telegram app for the message."
     echo ""
@@ -1482,7 +1504,7 @@ if echo "$RESPONSE" | grep -q '"ok":true'; then
         echo ""
     fi
 else
-    echo "❌ FAILED: Could not send message."
+    echo "FAILED: Could not send message."
     echo ""
     echo "Response from Telegram API:"
     echo "$RESPONSE"
@@ -1725,18 +1747,21 @@ info "Preparing Claude Code directory structure on host..."
 mkdir -p "$HOME/.claude/session-env" "$HOME/.claude/shell-snapshots"
 chmod 755 "$HOME/.claude" "$HOME/.claude/session-env" "$HOME/.claude/shell-snapshots" 2>/dev/null || true
 
-# If running on Linux, try to set ownership to match container's ai-worker UID (1000)
+# If running on Linux, ensure the container's ai-worker (UID 1000) can write.
+# Instead of changing ownership (which breaks the host user on re-runs), we open
+# permissions so both host user and container user can read/write.
+# The container entrypoint will set final ownership for ai-worker inside the container.
 if [[ "$OS_TYPE" == "Linux" ]]; then
-    # Check if current user's UID is 1000 (matches container)
     if [[ "$(id -u)" == "1000" ]]; then
-        info "Host UID matches container UID (1000) — permissions should work correctly."
+        info "Host UID matches container UID (1000) — no permission fixup needed."
     else
-        warn "Host UID ($(id -u)) differs from container UID (1000)."
-        warn "This may cause permission issues with the mounted .claude directory."
-        if confirm "Set $HOME/.claude ownership to UID 1000 (container's ai-worker)?"; then
-            sudo chown -R 1000:1000 "$HOME/.claude" 2>/dev/null || \
-                warn "Could not change ownership. You may need to run: sudo chown -R 1000:1000 $HOME/.claude"
-        fi
+        info "Host UID ($(id -u)) differs from container UID (1000)."
+        info "Opening permissions on $HOME/.claude so both host and container can access it..."
+        chmod -R a+rwX "$HOME/.claude" 2>/dev/null || {
+            warn "Could not set permissions. Trying with sudo..."
+            sudo chmod -R a+rwX "$HOME/.claude" 2>/dev/null || \
+                warn "Could not fix permissions. The container entrypoint will attempt to fix this at startup."
+        }
     fi
 fi
 
