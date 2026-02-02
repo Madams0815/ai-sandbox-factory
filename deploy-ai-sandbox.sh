@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# deploy-ai-sandbox.sh v1.0.1 — Comprehensive AI Sandbox Factory
+# deploy-ai-sandbox.sh — Comprehensive AI Sandbox Factory
 # =============================================================================
 # Creates a fully-equipped Docker container as an "AI Sandbox" with:
 #   - Multi-platform host detection (macOS, Arch, Debian/Ubuntu)
@@ -1120,8 +1120,9 @@ fi
 echo ""
 
 # =============================================
-# Phase 3: Drop privileges and keep alive
+# Phase 3: Signal readiness, drop privileges, and keep alive
 # =============================================
+touch /tmp/.entrypoint-done
 exec gosu $AI_USER tail -f /dev/null
 SCRIPTEOF
 
@@ -1787,15 +1788,32 @@ if [[ "${ENABLE_DASHBOARD:-true}" == "true" ]]; then
     info "Dashboard available at: http://localhost:$DASHBOARD_PORT"
 fi
 
+# --- Wait for container to be ready ---
+info "Waiting for container to be ready..."
+READY=false
+for i in $(seq 1 30); do
+    if $DOCKER_COMPOSE exec -T ai-sandbox test -f /tmp/.entrypoint-done 2>/dev/null; then
+        READY=true
+        break
+    fi
+    sleep 1
+done
+if [ "$READY" = true ]; then
+    info "Container is ready."
+else
+    warn "Container did not signal readiness within 30s — tmux session may need manual retry."
+fi
+
 # --- Launch tmux session ---
 if command -v tmux &>/dev/null; then
     SESSION_NAME="ai-sandbox-$PROJECT_NAME"
     if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
         warn "tmux session '$SESSION_NAME' already exists."
     else
-        tmux new-session -d -s "$SESSION_NAME"
-        tmux send-keys -t "$SESSION_NAME" "cd $BASE_DIR" C-m
-        tmux send-keys -t "$SESSION_NAME" "$DOCKER_COMPOSE exec -u ai-worker ai-sandbox bash -l" C-m
+        # Use a wrapper command that retries docker exec, so the tmux pane
+        # stays alive even if the first attempt fails.
+        tmux new-session -d -s "$SESSION_NAME" \
+            "cd $BASE_DIR && while ! $DOCKER_COMPOSE exec -u ai-worker ai-sandbox bash -l; do echo 'Container not ready, retrying in 2s...'; sleep 2; done"
         info "tmux session created: $SESSION_NAME"
     fi
 fi
