@@ -1,3 +1,5 @@
+**Everything I wanted to implement with this project is now already available in Claude Code out of the box, so this project is discontinued**
+
 # AI Sandbox Factory
 
 A comprehensive deployment script for Docker-based development environments, serving autonomous AI-assisted coding workflows (Ralph Wiggum loop) with multi-AI routing (Claude, Gemini, local models), RAG capabilities, and automated task orchestration.
